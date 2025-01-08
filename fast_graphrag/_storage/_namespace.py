@@ -26,10 +26,7 @@ class Workspace:
         if not os.path.exists(working_dir):
             os.makedirs(working_dir)
 
-        self.checkpoints = sorted(
-            (int(x.name) for x in os.scandir(self.working_dir) if x.is_dir() and not x.name.startswith("0__err_")),
-            reverse=True,
-        )
+        self.checkpoints = []
         if self.checkpoints:
             self.current_load_checkpoint = checkpoint if checkpoint else self.checkpoints[0]
         else:
@@ -56,7 +53,6 @@ class Workspace:
         if load_path == self.working_dir and len([x for x in os.scandir(load_path) if x.is_file()]) == 0:
             return None
         return load_path
-
 
     def get_save_path(self) -> str:
         if self.save_checkpoint is None:

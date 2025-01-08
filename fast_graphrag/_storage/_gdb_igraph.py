@@ -88,7 +88,8 @@ class IGraphStorage(BaseGraphStorage[GTNode, GTEdge, GTId]):
             self.config.edge_cls(
                 source=self._graph.vs[edge.source]["name"],  # type: ignore
                 target=self._graph.vs[edge.target]["name"],  # type: ignore
-                **edge.attributes(),  # type: ignore
+                description=edge["relation"],  # type: ignore
+                # **edge.attributes(),  # type: ignore
             )
             if edge
             else None
@@ -207,7 +208,7 @@ class IGraphStorage(BaseGraphStorage[GTNode, GTEdge, GTId]):
             if graph_file_name:
                 try:
                     self._graph = ig.Graph.Read_Picklez(graph_file_name)  # type: ignore
-                    logger.debug(f"Loaded graph storage '{graph_file_name}'.")
+                    print(f"Loaded graph storage '{graph_file_name}'.")
                 except Exception as e:
                     t = f"Error loading graph from {graph_file_name}: {e}"
                     logger.error(t)
@@ -217,7 +218,7 @@ class IGraphStorage(BaseGraphStorage[GTNode, GTEdge, GTId]):
                 self._graph = ig.Graph(directed=False)
         else:
             self._graph = ig.Graph(directed=False)
-            logger.debug("Creating new volatile graphdb storage.")
+            print("Creating new volatile graphdb storage.")
 
     async def _insert_done(self):
         if self.namespace:
@@ -235,7 +236,7 @@ class IGraphStorage(BaseGraphStorage[GTNode, GTEdge, GTId]):
         if graph_file_name:
             try:
                 self._graph = ig.Graph.Read_Picklez(graph_file_name)  # type: ignore
-                logger.debug(f"Loaded graph storage '{graph_file_name}'.")
+                print(f"Loaded graph storage '{graph_file_name}'.")
             except Exception as e:
                 t = f"Error loading graph from '{graph_file_name}': {e}"
                 logger.error(t)

@@ -1,5 +1,7 @@
 """Entity-Relationship extraction module."""
+
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Literal, Optional
@@ -7,10 +9,9 @@ from typing import Dict, Iterable, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from fast_graphrag._llm import BaseLLMService, format_and_send_prompt
-from fast_graphrag._models import TQueryEntities
 from fast_graphrag._storage._base import BaseGraphStorage
 from fast_graphrag._storage._gdb_igraph import IGraphStorage, IGraphStorageConfig
-from fast_graphrag._types import GTId, TChunk, TEntity, TGraph, TRelation
+from fast_graphrag._types import GTId, TChunk, TEntity, TGraph, TQueryEntities, TRelation
 from fast_graphrag._utils import logger
 
 from ._base import BaseInformationExtractionService
@@ -40,20 +41,26 @@ class DefaultInformationExtractionService(BaseInformationExtractionService[TChun
 
     async def extract_entities_from_query(
         self, llm: BaseLLMService, query: str, prompt_kwargs: Dict[str, str]
-    ) -> Dict[str, List[str]]:
+    ) -> Iterable[TEntity]:
         """Extract entities from the given query."""
         prompt_kwargs["query"] = query
-        entities, _ = await format_and_send_prompt(
+        output, _ = await format_and_send_prompt(
             prompt_key="entity_extraction_query",
             llm=llm,
             format_kwargs=prompt_kwargs,
             response_model=TQueryEntities,
         )
 
-        return {
-            "named": entities.named,
-            "generic": entities.generic
-        }
+        match = re.search(r'\{.*\}', output.replace("\n", ""))
+        if match:
+            dict_str = match.group(0)
+            # Convert the string to a dictionary
+            entities = json.loads(dict_str)
+            print(entities)
+        else:
+            print("No dictionary found in the string:", output)
+
+        return [TEntity(name=name, type="", description="") for name in entities['entities']]
 
     async def _extract(
         self, llm: BaseLLMService, chunks: Iterable[TChunk], prompt_kwargs: Dict[str, str], entity_types: List[str]

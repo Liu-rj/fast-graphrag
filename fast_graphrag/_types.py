@@ -1,40 +1,17 @@
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field, fields
-from typing import Any, Callable, ClassVar, Dict, Generic, Iterable, List, Optional, Tuple, TypeAlias, TypeVar
+from dataclasses import dataclass, field
+from itertools import chain
+from typing import Any, Callable, Dict, Generic, Iterable, List, Optional, Tuple, TypeAlias, TypeVar, Union
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import Field, field_validator
-
-from ._models import BaseModelAlias, dump_to_csv, dump_to_reference_list
+from pydantic import BaseModel, Field, field_validator
+from pydantic._internal import _model_construction
 
 ####################################################################################################
 # GENERICS
 ####################################################################################################
-
-
-@dataclass
-class TSerializable:
-    F_TO_CONTEXT: ClassVar[List[str]] = []
-
-    @classmethod
-    def to_dict(
-        cls,
-        obj: Optional["TSerializable"] = None,
-        objs: Optional[Iterable["TSerializable"]] = None,
-        include_fields: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        # Compute the fields to include
-        if include_fields is None:
-            include_fields = [f.name for f in fields(cls)]
-        if obj is not None:
-            assert objs is None, "Either edge or edges should be provided, not both"
-            return {f: getattr(obj, f) for f in include_fields}
-        elif objs is not None:
-            return {f: [getattr(o, f) for o in objs] for f in include_fields}
-        return {}
-
 
 # Blob
 GTBlob = TypeVar("GTBlob")
@@ -48,19 +25,22 @@ GTEmbedding = TypeVar("GTEmbedding")
 GTHash = TypeVar("GTHash")
 
 # Graph
+GTGraph = TypeVar("GTGraph")
 GTId = TypeVar("GTId")
 
 
 @dataclass
-class BTNode(TSerializable):
+class BTNode:
     name: Any
+    node_name: Any = "UNKOWN"
+    node_type: Any = "UNKOWN"
 
 
 GTNode = TypeVar("GTNode", bound=BTNode)
 
 
 @dataclass
-class BTEdge(TSerializable):
+class BTEdge:
     source: Any
     target: Any
 
@@ -73,16 +53,75 @@ GTEdge = TypeVar("GTEdge", bound=BTEdge)
 
 
 @dataclass
-class BTChunk(TSerializable):
+class BTChunk:
     id: Any
 
 
 GTChunk = TypeVar("GTChunk", bound=BTChunk)
 
 
+# LLM
+def _schema_no_title(schema: dict[str, Any]) -> None:
+    schema.pop("required")
+    for prop in schema.get("properties", {}).values():
+        prop.pop("title", None)
+
+
+class MetaModel(_model_construction.ModelMetaclass):
+    def __new__(
+        cls, name: str, bases: tuple[type[Any], ...], dct: Dict[str, Any], alias: Optional[str] = None, **kwargs: Any
+    ) -> type:
+        if alias:
+            dct["__qualname__"] = alias
+        if "BaseModel" not in [base.__name__ for base in bases]:
+            bases = bases + (BaseModel,)
+        return super().__new__(cls, name, bases, dct, json_schema_extra=_schema_no_title, **kwargs)
+
+
+class BTResponseModel:
+    class Model(BaseModel):
+        @staticmethod
+        def to_dataclass(pydantic: Any) -> Any:
+            raise NotImplementedError
+
+    def to_str(self) -> str:
+        raise NotImplementedError
+
+
+GTResponseModel = TypeVar("GTResponseModel", bound=Union[str, BaseModel, BTResponseModel])
+
 ####################################################################################################
 # TYPES
 ####################################################################################################
+
+
+def dump_to_csv(
+    data: Iterable[object],
+    fields: List[str],
+    separator: str = "\t",
+    with_header: bool = False,
+    **values: Dict[str, List[Any]],
+) -> List[str]:
+    rows = list(
+        chain(
+            (separator.join(chain(fields, values.keys())),) if with_header else (),
+            chain(
+                separator.join(
+                    chain(
+                        (str(getattr(d, field)).replace("\t", "    ") for field in fields),
+                        (str(v).replace("\t", "    ") for v in vs),
+                    )
+                )
+                for d, *vs in zip(data, *values.values())
+            ),
+        )
+    )
+    return rows
+
+
+def dump_to_reference_list(data: Iterable[object], separator: str = "\n=====\n\n"):
+    return [f"[{i + 1}]  {d}{separator}" for i, d in enumerate(data)]
+
 
 # Embedding types
 TEmbeddingType: TypeAlias = np.float32
@@ -104,7 +143,7 @@ class TDocument:
 
 @dataclass
 class TChunk(BTChunk):
-    F_TO_CONTEXT = ["content", "metadata"]
+    """A class for representing a chunk."""
 
     id: THash = field()
     content: str = field()
@@ -116,23 +155,21 @@ class TChunk(BTChunk):
 
 # Graph types
 @dataclass
-class TEntity(BaseModelAlias, BTNode):
-    F_TO_CONTEXT = ["name", "description"]
-
+class TEntity(BTResponseModel, BTNode):
     name: str = field()
-    type: str = field()
-    description: str = field()
+    type: str = Field()
+    description: str = Field()
 
     def to_str(self) -> str:
-        s = f"[{self.type}] {self.name}"
+        s = f"[NAME] {self.name}"
         if len(self.description):
-            s += f"\n[DESCRIPTION] {self.description}"
+            s += f"  [DESCRIPTION] {self.description}"
         return s
 
-    class Model(BaseModelAlias.Model, alias="Entity"):
-        name: str = Field(..., description="Name of the entity")
-        type: str = Field(..., description="Type of the entity")
-        desc: str = Field(..., description="Description of the entity")
+    class Model(BTResponseModel.Model, metaclass=MetaModel, alias="Entity"):
+        name: str = Field(..., description="The name of the entity")
+        type: str = Field(..., description="The type of the entity")
+        desc: str = Field(..., description="The description of the entity")
 
         @staticmethod
         def to_dataclass(pydantic: "TEntity.Model") -> "TEntity":
@@ -149,10 +186,21 @@ class TEntity(BaseModelAlias, BTNode):
             return value.upper() if value else value
 
 
-@dataclass
-class TRelation(BaseModelAlias, BTEdge):
-    F_TO_CONTEXT = ["source", "target", "description"]
+class TQueryEntities(BaseModel):
+    entities: List[str] = Field(
+        ...,
+        description=("The list of entities extracted from the query."),
+    )
+    n: int = Field(..., description="The number of named entities found")  # So that the LLM can answer 0.
 
+    @field_validator("entities", mode="before")
+    @classmethod
+    def uppercase_source(cls, value: List[str]):
+        return [e.upper() for e in value] if value else value
+
+
+@dataclass
+class TRelation(BTResponseModel, BTEdge):
     source: str = field()
     target: str = field()
     description: str = field()
@@ -195,11 +243,10 @@ class TRelation(BaseModelAlias, BTEdge):
         else:
             return {}
 
-    class Model(BaseModelAlias.Model, alias="Relationship"):
-        source: str = Field(..., description="Name of the source entity")
-        target: str = Field(..., description="Name of the target entity")
-        # alternative description "Explanation of why the source entity and the target entity are related to each other"
-        desc: str = Field(..., description="Description of the relationship between the source and target entity")
+    class Model(BTResponseModel.Model, metaclass=MetaModel, alias="Relation"):
+        source: str = Field(..., description="The name of the source entity")
+        target: str = Field(..., description="The name of the target entity")
+        desc: str = Field(..., description="The description of the relationship between the source and target entity")
 
         @staticmethod
         def to_dataclass(pydantic: "TRelation.Model") -> "TRelation":
@@ -217,17 +264,17 @@ class TRelation(BaseModelAlias, BTEdge):
 
 
 @dataclass
-class TGraph(BaseModelAlias):
+class TGraph(BTResponseModel):
     entities: List[TEntity] = field()
     relationships: List[TRelation] = field()
 
-    class Model(BaseModelAlias.Model, alias="Graph"):
-        entities: List[TEntity.Model] = Field(description="List of extracted entities")
-        relationships: List[TRelation.Model] = Field(description="Relationships between the entities")
+    class Model(BTResponseModel.Model, metaclass=MetaModel, alias="Graph"):
+        entities: List[TEntity.Model] = Field(description="The list of extracted entities")
+        relationships: List[TRelation.Model] = Field(description="The relationships between the entities")
         other_relationships: List[TRelation.Model] = Field(
             description=(
-                "Other relationships between the extracted entities previously missed"
-                "(likely involving minor/generic entities)"
+                "Other and missed relationships between the extracted entities"
+                " (likely involving more generic entities)"
             )
         )
 
@@ -240,42 +287,61 @@ class TGraph(BaseModelAlias):
             )
 
 
+class TEditRelation(BaseModel):
+    ids: List[int] = Field(..., description="The ids of the facts that you are combining into one.")
+    description: str = Field(
+        ..., description="The summarized description of the combined facts, in detail and comprehensive."
+    )
+
+
+class TEditRelationList(BaseModel):
+    groups: List[TEditRelation] = Field(
+        ...,
+        description="The list of new fact groups. Include only groups of more than one fact.",
+        alias="grouped_facts",
+    )
+
+
 @dataclass
 class TContext(Generic[GTNode, GTEdge, GTHash, GTChunk]):
     """A class for representing the context used to generate a query response."""
 
-    entities: List[Tuple[GTNode, TScore]] = field()
-    relations: List[Tuple[GTEdge, TScore]] = field()
-    chunks: List[Tuple[GTChunk, TScore]] = field()
+    entities: List[Tuple[GTNode, TScore]]
+    relationships: List[Tuple[GTEdge, TScore]]
+    chunks: List[Tuple[GTChunk, TScore]]
 
-    def truncate(self, max_chars: Dict[str, int], output_context_str: bool = False) -> str:
-        """Genearate a tabular representation of the context.
-
-        Truncate the tables to the maximum number of assigned tokens.
-        """
+    def to_str(self, max_chars: Dict[str, int]) -> str:
+        """Convert the context to a string representation."""
         csv_tables: Dict[str, List[str]] = {
-            "entities": dump_to_csv([e for e, _ in self.entities], ["name", "description"], with_header=True),
-            "relations": dump_to_csv(
-                [r for r, _ in self.relations], ["source", "target", "description"], with_header=True
+            "entities": dump_to_csv(
+                [e for e, _ in self.entities], ["node_name", "node_type", "description"], with_header=True
             ),
-            "chunks": dump_to_reference_list([str(c) for c, _ in self.chunks]),
+            "relationships": dump_to_csv(
+                [r for r, _ in self.relationships], ["source", "target", "description"], with_header=True
+            ),
+            # "chunks": dump_to_reference_list([str(c) for c, _ in self.chunks]),
         }
         csv_tables_row_length = {k: [len(row) for row in table] for k, table in csv_tables.items()}
 
+        include_up_to = {
+            "entities": 0,
+            "relationships": 0,
+            # "chunks": 0,
+        }
+
         # Truncate each csv to the maximum number of assigned tokens
-        included_up_to = {key: 0 for key in ["entities", "relations", "chunks"]}
         chars_remainder = 0
         while True:
             last_char_remainder = chars_remainder
             # Keep augmenting the context until feasible
             for table in csv_tables:
-                for i in range(included_up_to[table], len(csv_tables_row_length[table])):
+                for i in range(include_up_to[table], len(csv_tables_row_length[table])):
                     length = csv_tables_row_length[table][i] + 1  # +1 for the newline character
                     if length <= chars_remainder:  # use up the remainder
-                        included_up_to[table] += 1
+                        include_up_to[table] += 1
                         chars_remainder -= length
                     elif length <= max_chars[table]:  # use up the assigned tokens
-                        included_up_to[table] += 1
+                        include_up_to[table] += 1
                         max_chars[table] -= length
                     else:
                         break
@@ -288,43 +354,41 @@ class TContext(Generic[GTNode, GTEdge, GTHash, GTChunk]):
             if chars_remainder == last_char_remainder:
                 break
 
-        # Truncate the context
-        self.entities = self.entities[: included_up_to["entities"]]
-        self.relations = self.relations[: included_up_to["relations"]]
-        self.chunks = self.chunks[: included_up_to["chunks"]]
+        data: List[str] = []
+        if len(self.entities):
+            data.extend(
+                [
+                    "\n## Entities",
+                    "```csv",
+                    *csv_tables["entities"][: include_up_to["entities"]],
+                    "```",
+                ]
+            )
+        else:
+            data.append("\n#Entities: None\n")
 
-        # Generate the context string
-        context: List[str] = []
-        if output_context_str:
-            if len(self.entities):
-                context.extend(
-                    [
-                        "\n## Entities",
-                        "```csv",
-                        *csv_tables["entities"][: included_up_to["entities"]],
-                        "```",
-                    ]
-                )
-            else:
-                context.append("\n#Entities: None\n")
+        if len(self.relationships):
+            data.extend(
+                [
+                    "\n## Relationships",
+                    "```csv",
+                    *csv_tables["relationships"][: include_up_to["relationships"]],
+                    "```",
+                ]
+            )
+        else:
+            data.append("\n## Relationships: None\n")
 
-            if len(self.relations):
-                context.extend(
-                    [
-                        "\n## Relationships",
-                        "```csv",
-                        *csv_tables["relations"][: included_up_to["relations"]],
-                        "```",
-                    ]
-                )
-            else:
-                context.append("\n## Relationships: None\n")
-
-            if len(self.chunks):
-                context.extend(["\n## Sources\n", *csv_tables["chunks"][: included_up_to["chunks"]], ""])
-            else:
-                context.append("\n## Sources: None\n")
-        return "\n".join(context)
+        # if len(self.chunks):
+        #     data.extend(
+        #         [
+        #             "\n## Sources\n",
+        #             *csv_tables["chunks"][: include_up_to["chunks"]],
+        #         ]
+        #     )
+        # else:
+        #     data.append("\n## Sources: None\n")
+        return "\n".join(data)
 
 
 @dataclass
@@ -334,36 +398,20 @@ class TQueryResponse(Generic[GTNode, GTEdge, GTHash, GTChunk]):
     response: str
     context: TContext[GTNode, GTEdge, GTHash, GTChunk]
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert the query response to a dictionary."""
-        return {
-            "response": self.response,
-            "context": {
-                "entities": [(e.to_dict(e, include_fields=e.F_TO_CONTEXT), float(s)) for e, s in self.context.entities],
-                "relations": [
-                    (r.to_dict(r, include_fields=r.F_TO_CONTEXT), float(s)) for r, s in self.context.relations
-                ],
-                "chunks": [(c.to_dict(c, include_fields=c.F_TO_CONTEXT), float(s)) for c, s in self.context.chunks],
-            },
-        }
-
-    # All the machinery to format references
-    ####################################################################################################
-
     @dataclass
-    class _Chunk:
+    class Chunk:
         id: int = field()
         content: str = field()
         index: Optional[int] = field(init=False, default=None)
 
     @dataclass
-    class _Document:
+    class Document:
         metadata: Dict[str, Any] = field(init=False, default_factory=dict)
-        chunks: Dict[int, "TQueryResponse._Chunk"] = field(init=False, default_factory=dict)
+        chunks: Dict[int, "TQueryResponse.Chunk"] = field(init=False, default_factory=dict)
         index: Optional[int] = field(init=False, default=None)
         _last_chunk_index: int = field(init=False, default=0)
 
-        def get_chunk(self, id: int) -> Tuple[int, "TQueryResponse._Chunk"]:
+        def get_chunk(self, id: int) -> Tuple[int, "TQueryResponse.Chunk"]:
             chunk = self.chunks[id]
             if chunk.index is None:
                 self._last_chunk_index += 1
@@ -379,13 +427,13 @@ class TQueryResponse(Generic[GTNode, GTEdge, GTHash, GTChunk]):
             }
 
     @dataclass
-    class _ReferenceList:
-        documents: Dict[int, "TQueryResponse._Document"] = field(
-            default_factory=lambda: defaultdict(lambda: TQueryResponse._Document())
+    class Context:
+        documents: Dict[int, "TQueryResponse.Document"] = field(
+            default_factory=lambda: defaultdict(lambda: TQueryResponse.Document())
         )
         _last_document_index: int = field(init=False, default=0)
 
-        def get_doc(self, id: int) -> Tuple[int, "TQueryResponse._Document"]:
+        def get_doc(self, id: int) -> Tuple[int, "TQueryResponse.Document"]:
             doc = self.documents[id]
             if doc.index is None:
                 self._last_document_index += 1
@@ -397,7 +445,7 @@ class TQueryResponse(Generic[GTNode, GTEdge, GTHash, GTChunk]):
 
     def format_references(self, format_fn: Callable[[int, List[int], Any], str] = lambda i, _, __: f"[{i}]"):
         # Create list of documents
-        reference_list = self._ReferenceList()
+        context = self.Context()
         ref2data: Dict[str, Tuple[int, int]] = {}
 
         for i, (chunk, _) in enumerate(self.context.chunks):
@@ -407,8 +455,8 @@ class TQueryResponse(Generic[GTNode, GTEdge, GTHash, GTChunk]):
                 doc_id = chunk_id
             else:
                 doc_id = hash(frozenset(metadata.items()))
-            reference_list.documents[doc_id].metadata = metadata
-            reference_list.documents[doc_id].chunks[chunk_id] = TQueryResponse._Chunk(chunk_id, str(chunk))
+            context.documents[doc_id].metadata = metadata
+            context.documents[doc_id].chunks[chunk_id] = TQueryResponse.Chunk(chunk_id, str(chunk))
             ref2data[str(i + 1)] = (doc_id, chunk_id)
 
         def _replace_fn(match: str | re.Match[str]) -> str:
@@ -434,10 +482,8 @@ class TQueryResponse(Generic[GTNode, GTEdge, GTHash, GTChunk]):
                     continue
                 seen_docs.pop(doc_id)
 
-                doc_index, doc = reference_list.get_doc(doc_id)
+                doc_index, doc = context.get_doc(doc_id)
                 r += format_fn(doc_index, [doc.get_chunk(id)[0] for id in chunk_ids], doc.metadata)
             return r
 
-        return re.sub(r"\[\d[\s\d\]\[]*\]", _replace_fn, self.response), reference_list.to_dict()
-
-    ####################################################################################################
+        return re.sub(r"\[\d[\s\d\]\[]*\]", _replace_fn, self.response), context.to_dict()

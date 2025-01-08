@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 
 from fast_graphrag._llm._llm_openai import OpenAIEmbeddingService, OpenAILLMService
-from fast_graphrag._models import TAnswer
 from fast_graphrag._storage._base import BaseStorage
 from fast_graphrag._storage._ikv_pickle import PickleIndexedKeyValueStorage
 from fast_graphrag._storage._namespace import Workspace
@@ -32,8 +31,7 @@ async def format_and_send_prompt(
     formatted_prompt = prompt.format(**format_kwargs)
 
     # Send the formatted prompt to the LLM
-    response, rest = await llm.send_message(prompt=formatted_prompt, response_model=TAnswer, **args)
-    return response.answer, rest
+    return await llm.send_message(prompt=formatted_prompt, response_model=str, **args)
 
 
 def dump_to_reference_list(data: Iterable[object], separator: str = "\n=====\n\n"):
@@ -164,7 +162,7 @@ async def upsert_to_vdb(data: List[Tuple[str, str]], working_dir: str = "./"):
     workspace = Workspace(working_dir)
     storage = VectorStorage(workspace)
     await storage.insert_start()
-    await storage.upsert([xxhash.xxh64(corpus).intdigest() for _, (title, corpus) in data], [(title, corpus) for _, (title, corpus) in data])
+    await storage.upsert([xxhash.xxh64(corpus).intdigest() for _, corpus in data], data)
     await storage.insert_done()
 
 
@@ -196,7 +194,7 @@ class Query:
 
 
 def load_dataset(dataset_name: str, subset: int = 0) -> Any:
-    """Load a dataset from the datasets folder."""
+    """Load a dataset."""
     with open(f"./datasets/{dataset_name}.json", "r") as f:
         dataset = json.load(f)
 
@@ -206,29 +204,28 @@ def load_dataset(dataset_name: str, subset: int = 0) -> Any:
         return dataset
 
 
-def get_corpus(dataset: Any, dataset_name: str) -> Dict[int, Tuple[int | str, str]]:
-    """Get the corpus from the dataset."""
-    if dataset_name == "2wikimultihopqa" or dataset_name == "hotpotqa":
-        passages: Dict[int, Tuple[int | str, str]] = {}
+def get_corpus(dataset: Any) -> Dict[str, str]:
+    """Get the corpus."""
+    passages: Dict[str, List[List[str]]] = defaultdict(list)
 
-        for datapoint in dataset:
-            context = datapoint["context"]
+    for datapoint in dataset:
+        context = datapoint["context"]
 
-            for passage in context:
-                title, text = passage
-                title = title.encode("utf-8").decode()
-                text = "\n".join(text).encode("utf-8").decode()
-                hash_t = xxhash.xxh3_64_intdigest(text)
-                if hash_t not in passages:
-                    passages[hash_t] = (title, text)
+        for passage in context:
+            title, text = passage
+            passages[title].append(text)
 
-        return passages
-    else:
-        raise NotImplementedError(f"Dataset {dataset_name} not supported.")
+    for title, passage in passages.items():
+        passages[title] = [passage[0]]
+
+    return {
+        title.encode("utf-8").decode(): "  ".join(passage[0]).encode("utf-8").decode()
+        for title, passage in passages.items()
+    }
 
 
 def get_queries(dataset: Any):
-    """Get the queries from the dataset."""
+    """Get the queries."""
     queries: List[Query] = []
 
     for datapoint in dataset:
@@ -257,9 +254,9 @@ if __name__ == "__main__":
     print("Loading dataset...")
     dataset = load_dataset(args.dataset, subset=args.n)
     working_dir = f"./db/vdb/{args.dataset}_{args.n}"
-    corpus = get_corpus(dataset, args.dataset)
 
     if args.create:
+        corpus = get_corpus(dataset)
         print("Dataset loaded. Corpus:", len(corpus))
 
         async def _run_create():
@@ -267,7 +264,7 @@ if __name__ == "__main__":
 
         get_event_loop().run_until_complete(_run_create())
 
-    if args.benchmark:
+    elif args.benchmark:
         queries = get_queries(dataset)
 
         async def _query_task(query: Query) -> Tuple[Query, str]:
@@ -314,7 +311,7 @@ if __name__ == "__main__":
             ground_truth = answer["ground_truth"]
             predicted_evidence = answer["evidence"]
 
-            p_retrieved: float = len(set(ground_truth).intersection(set(predicted_evidence))) / len(set(ground_truth))
+            p_retrieved: float = len(set(ground_truth).intersection(set(predicted_evidence))) / len(ground_truth)
             retrieval_scores.append(p_retrieved)
 
             if answer["question"] in questions_multihop:

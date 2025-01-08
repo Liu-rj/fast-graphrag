@@ -22,6 +22,7 @@ from fast_graphrag._types import (
     GTNode,
     TContext,
     TDocument,
+    TEntity,
     TIndex,
 )
 
@@ -57,7 +58,7 @@ class BaseInformationExtractionService(Generic[GTChunk, GTNode, GTEdge, GTId]):
 
     async def extract_entities_from_query(
         self, llm: BaseLLMService, query: str, prompt_kwargs: Dict[str, str]
-    ) -> Dict[str, List[str]]:
+    ) -> Iterable[TEntity]:
         """Extract entities from the given query."""
         raise NotImplementedError
 
@@ -121,13 +122,13 @@ class BaseStateManagerService(Generic[GTNode, GTEdge, GTHash, GTChunk, GTId, GTE
         llm: BaseLLMService,
         subgraphs: List[asyncio.Future[Optional[BaseGraphStorage[GTNode, GTEdge, GTId]]]],
         documents: Iterable[Iterable[GTChunk]],
-        show_progress: bool = True
+        show_progress: bool = True,
     ) -> None:
         """Clean and upsert entities, relationships, and chunks into the storage."""
         raise NotImplementedError
 
     async def get_context(
-        self, query: str, entities: Dict[str, List[str]]
+        self, query: str, entities: Iterable[TEntity]
     ) -> Optional[TContext[GTNode, GTEdge, GTHash, GTChunk]]:
         """Retrieve relevant state from the storage."""
         raise NotImplementedError

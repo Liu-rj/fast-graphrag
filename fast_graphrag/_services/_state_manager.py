@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Dict, Iterable, List, Optional, Tuple, Type, 
 
 import numpy as np
 import numpy.typing as npt
-from scipy.sparse import csr_matrix, vstack
+from scipy.sparse import csr_matrix
 from tqdm import tqdm
 
 from fast_graphrag._llm import BaseLLMService
@@ -35,8 +35,7 @@ from ._base import BaseStateManagerService
 @dataclass
 class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THash, TChunk, TId, TEmbedding]):
     blob_storage_cls: Type[BaseBlobStorage[csr_matrix]] = field(default=PickleBlobStorage)
-    insert_similarity_score_threshold: float = field(default=0.9)
-    query_similarity_score_threshold: Optional[float] = field(default=0.7)
+    similarity_score_threshold: float = field(default=0.8)
 
     def __post_init__(self):
         assert self.workspace is not None, "Workspace must be provided."
@@ -133,7 +132,7 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
         # when selecting the index order.
         progress_bar.set_description("Building... [entity deduplication]")
         upserted_indices = np.array([i for i, _ in upserted_nodes]).reshape(-1, 1)
-        similar_indices, scores = await self.entity_storage.get_knn(embeddings, top_k=3)
+        similar_indices, scores = await self.entity_storage.get_knn(embeddings, top_k=5)
         similar_indices = np.array(similar_indices)
         scores = np.array(scores)
 
@@ -141,7 +140,7 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
         # We use the fact that similarity scores are symmetric between entity pairs,
         # so we only select half of that by index order
         similar_indices[
-            (scores < self.insert_similarity_score_threshold)
+            (scores < self.similarity_score_threshold)
             | (similar_indices <= upserted_indices)  # remove indices smaller or equal the entity
         ] = 0  # 0 can be used here (not 100% sure, but 99% sure)
         progress_bar.update(1)
@@ -183,33 +182,41 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
         progress_bar.set_description("Building [done]")
 
     async def get_context(
-        self, query: str, entities: Dict[str, List[str]]
+        self, query: str, entities: dict[str, str]
     ) -> Optional[TContext[TEntity, TRelation, THash, TChunk]]:
-        if self.entity_storage.size == 0:
-            return None
+        # if self.entity_storage.size == 0:
+        #     return None
+        entity_names = list(entities.keys())
+        name_ids, graph_ids = [], []
+        for name in entity_names:
+            name_id = entities[name]
+            name_ids.append(name_id)
+            graph_ids.append(self.graph_storage._graph.vs.find(name=name_id).index)
 
         try:
-            query_embeddings = await self.embedding_service.encode(
-                [f"{n}" for n in entities["named"]] + [f"[NONE] {n}" for n in entities["generic"]] + [query]
-            )
-            entity_scores: List[csr_matrix] = []
-            # Similarity-search over entities
-            if len(entities["named"]) > 0:
-                vdb_entity_scores_by_named_entity = await self._score_entities_by_vectordb(
-                    query_embeddings=query_embeddings[: len(entities["named"])],
-                    top_k=1,
-                    threshold=self.query_similarity_score_threshold,
-                )
-                entity_scores.append(vdb_entity_scores_by_named_entity)
+            # entity_names = [entity.name for entity in entities]
+            if len(entity_names) == 0:
+                return None
 
-            vdb_entity_scores_by_generic_entity_and_query = await self._score_entities_by_vectordb(
-                query_embeddings=query_embeddings[len(entities["named"]) :], top_k=20, threshold=0.5
-            )
-            entity_scores.append(vdb_entity_scores_by_generic_entity_and_query)
+            # query_embeddings = await self.embedding_service.encode(entity_names + [query])
+            # query_embeddings = await self.embedding_service.get_embedding([query])
 
-            vdb_entity_scores = vstack(entity_scores).max(axis=0)
+            # # Similarity-search over entities
+            # vdb_entity_scores_by_name = await self._score_entities_by_vectordb(
+            #     query_embeddings=query_embeddings[:-1], top_k=1
+            # )
+            # vdb_entity_scores_by_query = await self._score_entities_by_vectordb(
+            #     query_embeddings=query_embeddings[-1:], top_k=16
+            # )
 
-            if isinstance(vdb_entity_scores, int) or vdb_entity_scores.nnz == 0:
+            # vdb_entity_scores = vdb_entity_scores_by_name + vdb_entity_scores_by_query
+
+            vdb_entity_scores = csr_matrix((1, await self.graph_storage.node_count()))
+            for i in graph_ids:
+                vdb_entity_scores[0, i] = 1
+            vdb_entity_scores /= vdb_entity_scores.sum()
+
+            if vdb_entity_scores.nnz == 0:
                 return None
         except Exception as e:
             logger.error(f"Error during information extraction and scoring for query entities {entities}.\n{e}")
@@ -242,20 +249,26 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
             relevant_relationships: List[Tuple[TRelation, TScore]] = []
             for i, s in zip(indices, scores):
                 relationship = await self.graph_storage.get_edge_by_index(i)
+                relationship.source = self.graph_storage._graph.vs.find(name=relationship.source)["node_name"]
+                relationship.target = self.graph_storage._graph.vs.find(name=relationship.target)["node_name"]
                 if relationship is not None:
                     relevant_relationships.append((relationship, s))
 
             # Extract relevant chunks
-            chunk_scores = self.chunk_ranking_policy(
-                await self._score_chunks_by_relations(relationships_score=relation_scores)
-            )
-            indices, scores = extract_sorted_scores(chunk_scores)
-            relevant_chunks: List[Tuple[TChunk, TScore]] = []
-            for chunk, s in zip(await self.chunk_storage.get_by_index(indices), scores):
-                if chunk is not None:
-                    relevant_chunks.append((chunk, s))
+            # chunk_scores = self.chunk_ranking_policy(
+            #     await self._score_chunks_by_relations(relationships_score=relation_scores)
+            # )
+            # indices, scores = extract_sorted_scores(chunk_scores)
+            # relevant_chunks: List[Tuple[TChunk, TScore]] = []
+            # for chunk, s in zip(await self.chunk_storage.get_by_index(indices), scores):
+            #     if chunk is not None:
+            #         relevant_chunks.append((chunk, s))
 
-            return TContext(entities=relevant_entities, relations=relevant_relationships, chunks=relevant_chunks)
+            # print(f"entities: {relevant_entities}")
+            # print(f"relationships: {relevant_relationships}")
+            # print(f"chunks: {relevant_chunks}")
+
+            return TContext(entities=relevant_entities, relationships=relevant_relationships, chunks=None)
         except Exception as e:
             logger.error(f"Error during scoring of chunks and relationships.\n{e}")
             raise e
@@ -263,9 +276,7 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
     async def _get_entities_to_num_docs(self) -> Any:
         raise NotImplementedError
 
-    async def _score_entities_by_vectordb(
-        self, query_embeddings: Iterable[TEmbedding], top_k: int = 1, threshold: Optional[float] = None
-    ) -> csr_matrix:
+    async def _score_entities_by_vectordb(self, query_embeddings: Iterable[TEmbedding], top_k: int = 1) -> csr_matrix:
         # TODO: check this
         # if top_k != 1:
         #     logger.warning(f"Top-k > 1 is not tested yet. Using top_k={top_k}.")
@@ -273,15 +284,16 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
             raise NotImplementedError("Node specificity is not supported yet.")
 
         all_entity_probs_by_query_entity = await self.entity_storage.score_all(
-            np.array(query_embeddings), top_k=top_k, threshold=threshold
+            np.array(query_embeddings), top_k=top_k
         )  # (#query_entities, #all_entities)
 
         # TODO: if top_k > 1, we need to aggregate the scores here
         if all_entity_probs_by_query_entity.shape[1] == 0:
             return all_entity_probs_by_query_entity
-        # Normalize the scores
-        all_entity_probs_by_query_entity /= all_entity_probs_by_query_entity.sum(axis=1) + 1e-8
         all_entity_weights: csr_matrix = all_entity_probs_by_query_entity.max(axis=0)  # (1, #all_entities)
+
+        # Normalize the scores
+        all_entity_weights /= all_entity_weights.sum()
 
         if self.node_specificity:
             all_entity_weights = all_entity_weights.multiply(1.0 / await self._get_entities_to_num_docs())
@@ -316,9 +328,9 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
     async def query_start(self):
         storages: List[BaseStorage] = [
             self.graph_storage,
-            self.entity_storage,
-            self.chunk_storage,
-            self._relationships_to_chunks,
+            # self.entity_storage,
+            # self.chunk_storage,
+            # self._relationships_to_chunks,
             self._entities_to_relationships,
         ]
 

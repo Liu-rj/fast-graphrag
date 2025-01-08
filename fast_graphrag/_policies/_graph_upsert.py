@@ -6,10 +6,9 @@ from typing import Counter, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from fast_graphrag._llm._base import format_and_send_prompt
 from fast_graphrag._llm._llm_openai import BaseLLMService
-from fast_graphrag._models import TEditRelationList, TEntityDescription
 from fast_graphrag._prompt import PROMPTS
 from fast_graphrag._storage._base import BaseGraphStorage
-from fast_graphrag._types import GTEdge, GTId, GTNode, TEntity, THash, TId, TIndex, TRelation
+from fast_graphrag._types import GTEdge, GTId, GTNode, TEditRelationList, TEntity, THash, TId, TIndex, TRelation
 from fast_graphrag._utils import logger
 
 from ._base import BaseEdgeUpsertPolicy, BaseGraphUpsertPolicy, BaseNodeUpsertPolicy
@@ -29,12 +28,10 @@ async def summarize_entity_description(
         description=description
     )
     new_description, _ = await llm.send_message(
-        prompt=formatted_entity_description_summarization_prompt,
-        response_model=TEntityDescription,
-        max_tokens=max_tokens,
+        prompt=formatted_entity_description_summarization_prompt, response_model=str, max_tokens=max_tokens
     )
 
-    return new_description.description
+    return new_description
 
 
 ####################################################################################################
@@ -120,7 +117,7 @@ class NodeUpsertPolicy_SummarizeDescription(BaseNodeUpsertPolicy[TEntity, TId]):
                 nodes.append(existing_node)
 
             # Resolve descriptions
-            node_description = "\n".join((node.description for node in nodes))
+            node_description = "  ".join((node.description for node in nodes))
 
             if len(node_description) > self.config.max_node_description_size:
                 node_description = await summarize_entity_description(
@@ -133,6 +130,7 @@ class NodeUpsertPolicy_SummarizeDescription(BaseNodeUpsertPolicy[TEntity, TId]):
                     #     / TOKEN_TO_CHAR_RATIO
                     # ),
                 )
+                node_description = node_description.replace("\n", "  ")
 
             # Resolve types (pick most frequent)
             node_type = Counter((node.type for node in nodes)).most_common(1)[0][0]
@@ -293,7 +291,7 @@ class EdgeUpsertPolicy_UpsertValidAndMergeSimilarByLLM(BaseEdgeUpsertPolicy[TRel
 
             first_index = relation_indices[0]
             edge, index = map_incremental_to_edge[first_index]
-            edge.description = edges_group.description
+            edge.description = edges_group.description.replace("\n", "  ")
             visited_edges[first_index] = None  # None means it was visited but not marked for deletion.
             if edge.chunks:
                 chunks.update(edge.chunks)

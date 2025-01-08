@@ -28,7 +28,7 @@ class TestIGraphStorage(unittest.IsolatedAsyncioTestCase):
     async def test_get_node(self):
         node = MagicMock()
         node.name = "node1"
-        node.attributes.return_value = {"name": "foo", "description": "value", "type": ""}
+        node.attributes.return_value = {"name": "foo", "description": "value"}
         self.storage._graph.vs.find.return_value = node
 
         result = await self.storage.get_node("node1")
@@ -57,7 +57,7 @@ class TestIGraphStorage(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_node_by_index(self):
         node = MagicMock()
-        node.attributes.return_value = {"name": "foo", "description": "value", "type": "type"}
+        node.attributes.return_value = {"name": "foo", "description": "value"}
         self.storage._graph.vs.__getitem__.return_value = node
         self.storage._graph.vcount.return_value = 1
 
@@ -77,7 +77,7 @@ class TestIGraphStorage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, TRelation(source="node0", target="node1", **edge.attributes()))
 
     async def test_upsert_node(self):
-        node = TEntity(name="node1", description="value", type="type")
+        node = TEntity(name="node1", description="value")
         self.storage._graph.vcount.return_value = 1
         self.storage._graph.vs.__getitem__.return_value = MagicMock(index=0)
 

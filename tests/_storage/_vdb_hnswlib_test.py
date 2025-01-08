@@ -61,13 +61,13 @@ class TestHNSWVectorStorage(unittest.IsolatedAsyncioTestCase):
         embeddings = np.random.rand(2, 128).astype(np.float32)
         Vdb.update({i: np.random.rand(128).astype(np.float32) for i in range(10)})
         self.storage._index.knn_query = MagicMock()
-        self.storage._index.knn_query.return_value = ([[1, 2, 3], [4, 5, 6]], [[0, 0.2, 0.4], [1.6, 1.8, 2.0]])
+        self.storage._index.knn_query.return_value = ([[1, 2, 3], [4, 5, 6]], [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
 
-        ids, similarity = await self.storage.get_knn(embeddings, top_k=3)
+        ids, distances = await self.storage.get_knn(embeddings, top_k=3)
 
         self.storage._index.knn_query.assert_called_once_with(data=embeddings, k=3, num_threads=self.config.num_threads)
         self.assertEqual(ids, [[1, 2, 3], [4, 5, 6]])
-        np.testing.assert_almost_equal(similarity, np.array([[1.0, 0.9, 0.8], [0.2, 0.1, 0.0]], dtype=np.float32))
+        np.testing.assert_almost_equal(distances, np.array([[0.9, 0.8, 0.7], [0.6, 0.5, 0.4]], dtype=np.float32))
 
     @patch("fast_graphrag._storage._vdb_hnswlib.logger")
     async def test_score_all_empty_index(self, mock_logger):

@@ -1,11 +1,11 @@
 """This module implements a Graph-based Retrieval-Augmented Generation (GraphRAG) system."""
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Generic, List, Optional, Tuple, Union
 
 from fast_graphrag._llm import BaseLLMService, format_and_send_prompt
 from fast_graphrag._llm._base import BaseEmbeddingService
-from fast_graphrag._models import TAnswer
 from fast_graphrag._policies._base import BaseEdgeUpsertPolicy, BaseGraphUpsertPolicy, BaseNodeUpsertPolicy
 from fast_graphrag._prompt import PROMPTS
 from fast_graphrag._services._chunk_extraction import BaseChunkingService
@@ -23,11 +23,11 @@ class InsertParam:
 
 @dataclass
 class QueryParam:
-    with_references: bool = field(default=False)
-    only_context: bool = field(default=False)
-    entities_max_tokens: int = field(default=4000)
-    relations_max_tokens: int = field(default=3000)
-    chunks_max_tokens: int = field(default=9000)
+    with_references: bool = False
+    only_context: bool = False
+    entities_max_tokens: int = 50000
+    relationships_max_tokens: int = 50000
+    chunks_max_tokens: int = 0
 
 
 @dataclass
@@ -70,7 +70,7 @@ class BaseGraphRAG(Generic[GTEmbedding, GTHash, GTChunk, GTNode, GTEdge, GTId]):
         content: Union[str, List[str]],
         metadata: Union[List[Optional[Dict[str, Any]]], Optional[Dict[str, Any]]] = None,
         params: Optional[InsertParam] = None,
-        show_progress: bool = True
+        show_progress: bool = True,
     ) -> Tuple[int, int, int]:
         return get_event_loop().run_until_complete(self.async_insert(content, metadata, params, show_progress))
 
@@ -79,7 +79,7 @@ class BaseGraphRAG(Generic[GTEmbedding, GTHash, GTChunk, GTNode, GTEdge, GTId]):
         content: Union[str, List[str]],
         metadata: Union[List[Optional[Dict[str, Any]]], Optional[Dict[str, Any]]] = None,
         params: Optional[InsertParam] = None,
-        show_progress: bool = True
+        show_progress: bool = True,
     ) -> Tuple[int, int, int]:
         """Insert a new memory or memories into the graph.
 
@@ -142,12 +142,19 @@ class BaseGraphRAG(Generic[GTEmbedding, GTHash, GTChunk, GTNode, GTEdge, GTId]):
             logger.error(f"Error during insertion: {e}")
             raise e
 
-    def query(self, query: str, params: Optional[QueryParam] = None) -> TQueryResponse[GTNode, GTEdge, GTHash, GTChunk]:
+    def query(
+        self, query: str, id_mapping: dict, params: Optional[QueryParam] = None
+    ) -> Tuple[TQueryResponse[GTNode, GTEdge, GTHash, GTChunk], int, int, int]:
         async def _query() -> TQueryResponse[GTNode, GTEdge, GTHash, GTChunk]:
+            tic = time.time()
             await self.state_manager.query_start()
+            print(f"Query start time: {time.time() - tic}")
             try:
-                answer = await self.async_query(query, params)
-                return answer
+                tic = time.time()
+                answer, token_len = await self.async_query(query, id_mapping, params)
+                duration = time.time() - tic
+                print(f"******Query time: {duration}")
+                return answer, duration, token_len, 1
             except Exception as e:
                 logger.error(f"Error during query: {e}")
                 raise e
@@ -157,69 +164,74 @@ class BaseGraphRAG(Generic[GTEmbedding, GTHash, GTChunk, GTNode, GTEdge, GTId]):
         return get_event_loop().run_until_complete(_query())
 
     async def async_query(
-        self, query: Optional[str], params: Optional[QueryParam] = None
+        self, query: str, id_mapping: dict, params: Optional[QueryParam] = None
     ) -> TQueryResponse[GTNode, GTEdge, GTHash, GTChunk]:
         """Query the graph with a given input.
 
         Args:
             query (str): The query string to search for in the graph.
+            id_mapping (dict): A mapping of entity IDs to their corresponding names.
             params (QueryParam, optional): Additional parameters for the query. Defaults to None.
 
         Returns:
             TQueryResponse: The result of the query (response + context).
         """
-        if query is None or len(query) == 0:
-            return TQueryResponse[GTNode, GTEdge, GTHash, GTChunk](
-                response=PROMPTS["fail_response"], context=TContext([], [], [])
-            )
         if params is None:
             params = QueryParam()
 
         # Extract entities from query
-        extracted_entities = await self.information_extraction_service.extract_entities_from_query(
-            llm=self.llm_service, query=query, prompt_kwargs={}
-        )
+        # tic = time.time()
+        # extracted_entities = await self.information_extraction_service.extract_entities_from_query(
+        #     llm=self.llm_service, query=query, prompt_kwargs={}
+        # )
+        # print(f"******Extract entity time: {time.time() - tic}")
 
         # Retrieve relevant state
-        context = await self.state_manager.get_context(query=query, entities=extracted_entities)
-        if context is None:
+        tic = time.time()
+        relevant_state = await self.state_manager.get_context(query=query, entities=id_mapping)
+        if relevant_state is None:
             return TQueryResponse[GTNode, GTEdge, GTHash, GTChunk](
                 response=PROMPTS["fail_response"], context=TContext([], [], [])
             )
+        print(f"******Get context time: {time.time() - tic}")
+        print(
+            f"Number of entities: {len(relevant_state.entities)}, Number of relationships: {len(relevant_state.relationships)}"
+        )
 
         # Ask LLM
-        context_str = context.truncate(
-            max_chars={
-                "entities": params.entities_max_tokens * TOKEN_TO_CHAR_RATIO,
-                "relations": params.relations_max_tokens * TOKEN_TO_CHAR_RATIO,
-                "chunks": params.chunks_max_tokens * TOKEN_TO_CHAR_RATIO,
-            },
-            output_context_str=not params.only_context
-        )
+        tic = time.time()
         if params.only_context:
-            answer = ""
+            llm_response = ""
         else:
-            llm_response, _ = await format_and_send_prompt(
+            (llm_response, _), token_len = await format_and_send_prompt(
                 prompt_key="generate_response_query_with_references"
                 if params.with_references
                 else "generate_response_query_no_references",
                 llm=self.llm_service,
                 format_kwargs={
                     "query": query,
-                    "context": context_str
+                    "context": relevant_state.to_str(
+                        {
+                            "entities": params.entities_max_tokens * TOKEN_TO_CHAR_RATIO,
+                            "relationships": params.relationships_max_tokens * TOKEN_TO_CHAR_RATIO,
+                            "chunks": params.chunks_max_tokens * TOKEN_TO_CHAR_RATIO,
+                        }
+                    ),
                 },
-                response_model=TAnswer,
+                response_model=str,
             )
-            answer = llm_response.answer
+        print(f"******LLM response time: {time.time() - tic}")
 
-        return TQueryResponse[GTNode, GTEdge, GTHash, GTChunk](response=answer, context=context)
+        return TQueryResponse[GTNode, GTEdge, GTHash, GTChunk](response=llm_response, context=relevant_state), token_len
 
     def save_graphml(self, output_path: str) -> None:
         """Save the graph in GraphML format."""
+
         async def _save_graphml() -> None:
             await self.state_manager.query_start()
             try:
                 await self.state_manager.save_graphml(output_path)
             finally:
                 await self.state_manager.query_done()
+
         get_event_loop().run_until_complete(_save_graphml())

@@ -184,7 +184,7 @@ class BaseVectorStorage(BaseStorage, Generic[GTId, GTEmbedding]):
         raise NotImplementedError
 
     async def score_all(
-        self, embeddings: Iterable[GTEmbedding], top_k: int = 1, threshold: Optional[float] = None
+        self, embeddings: Iterable[GTEmbedding], top_k: int = 1, confidence_threshold: float = 0.0
     ) -> csr_matrix:
         """Score all embeddings against the given queries.
 

@@ -1,37 +1,42 @@
 """LLM Services module."""
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Optional, Tuple, Type
 
 import numpy as np
-from pydantic import BaseModel
+import tiktoken
 
-from fast_graphrag._models import BaseModelAlias
 from fast_graphrag._prompt import PROMPTS
+from fast_graphrag._types import GTResponseModel
 
-T_model = TypeVar("T_model", bound=Union[BaseModel, BaseModelAlias])
+
+def num_tokens(text: str, token_encoder: tiktoken.Encoding | None = None) -> int:
+    """Return the number of tokens in the given text."""
+    if token_encoder is None:
+        token_encoder = tiktoken.get_encoding("cl100k_base")
+    return len(token_encoder.encode(text))
 
 
 async def format_and_send_prompt(
     prompt_key: str,
     llm: "BaseLLMService",
     format_kwargs: dict[str, Any],
-    response_model: Type[T_model],
+    response_model: Type[GTResponseModel] | None = None,
     **args: Any,
-) -> Tuple[T_model, list[dict[str, str]]]:
+) -> Tuple[Tuple[str, list[dict[str, str]]], int]:
     """Get a prompt, format it with the supplied args, and send it to the LLM.
 
     Args:
         prompt_key (str): The key for the prompt in the PROMPTS dictionary.
         llm (BaseLLMService): The LLM service to use for sending the message.
-        response_model (Type[T_model]): The expected response model.
+        response_model (Type[GTResponseModel]): The expected response model.
         format_kwargs (dict[str, Any]): Dictionary of arguments to format the prompt.
         model (str | None): The model to use for the LLM. Defaults to None.
         max_tokens (int | None): The maximum number of tokens for the response. Defaults to None.
         **args (Any): Additional keyword arguments to pass to the LLM.
 
     Returns:
-        T_model: The response from the LLM.
+        GTResponseModel: The response from the LLM.
     """
     # Get the prompt from the PROMPTS dictionary
     prompt = PROMPTS[prompt_key]
@@ -39,8 +44,12 @@ async def format_and_send_prompt(
     # Format the prompt with the supplied arguments
     formatted_prompt = prompt.format(**format_kwargs)
 
+    token_len = num_tokens(formatted_prompt)
+
+    print("Num tokens in formatted prompt: ", token_len)
+
     # Send the formatted prompt to the LLM
-    return await llm.send_message(prompt=formatted_prompt, response_model=response_model, **args)
+    return await llm.send_message(prompt=formatted_prompt, response_model=response_model, **args), token_len
 
 
 @dataclass
@@ -58,9 +67,9 @@ class BaseLLMService:
         model: str | None = None,
         system_prompt: str | None = None,
         history_messages: list[dict[str, str]] | None = None,
-        response_model: Type[T_model] | None = None,
+        response_model: Type[GTResponseModel] | None = None,
         **kwargs: Any,
-    ) -> Tuple[T_model, list[dict[str, str]]]:
+    ) -> Tuple[str, list[dict[str, str]]]:
         """Send a message to the language model and receive a response.
 
         Args:
@@ -88,9 +97,7 @@ class BaseEmbeddingService:
 
     embedding_async_client: Any = field(init=False, default=None)
 
-    async def encode(
-        self, texts: list[str], model: Optional[str] = None
-    ) -> np.ndarray[Any, np.dtype[np.float32]]:
+    async def encode(self, texts: list[str], model: Optional[str] = None) -> np.ndarray[Any, np.dtype[np.float32]]:
         """Get the embedding representation of the input text.
 
         Args:

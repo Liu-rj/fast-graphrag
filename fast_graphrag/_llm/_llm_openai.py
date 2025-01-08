@@ -1,14 +1,16 @@
 """LLM Services module."""
-import os
+
 import asyncio
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Any, List, Literal, Optional, Tuple, Type, cast
+from typing import Any, List, Optional, Tuple, Type, cast
 
+import boto3
 import instructor
 import numpy as np
-from openai import APIConnectionError, AsyncAzureOpenAI, AsyncOpenAI, RateLimitError
+from openai import APIConnectionError, AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
 from tenacity import (
     AsyncRetrying,
     retry,
@@ -18,10 +20,10 @@ from tenacity import (
 )
 
 from fast_graphrag._exceptions import LLMServiceNoResponseError
-from fast_graphrag._types import BaseModelAlias
-from fast_graphrag._utils import logger, throttle_async_func_call
+from fast_graphrag._types import BTResponseModel, GTResponseModel
+from fast_graphrag._utils import TOKEN_TO_CHAR_RATIO, logger, throttle_async_func_call
 
-from ._base import BaseEmbeddingService, BaseLLMService, T_model
+from ._base import BaseEmbeddingService, BaseLLMService
 
 TIMEOUT_SECONDS = 180.0
 
@@ -31,42 +33,24 @@ class OpenAILLMService(BaseLLMService):
     """LLM Service for OpenAI LLMs."""
 
     model: Optional[str] = field(default="gpt-4o-mini")
-    mode: instructor.Mode = field(default=instructor.Mode.JSON)
-    client: Literal["openai", "azure"] = field(default="openai")
-    api_version: Optional[str] = field(default=None)
+    CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 
-    def __post_init__(self):
-        if self.client == "azure":
-            assert (
-                self.base_url is not None and self.api_version is not None
-            ), "Azure OpenAI requires a base url and an api version."
-            self.llm_async_client = instructor.from_openai(
-                AsyncAzureOpenAI(
-                    azure_endpoint=self.base_url,
-                    api_key=self.api_key,
-                    api_version=self.api_version,
-                    timeout=TIMEOUT_SECONDS,
-                ),
-                mode=self.mode,
-            )
-        elif self.client == "openai":
-            self.llm_async_client = instructor.from_openai(
-                AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, timeout=TIMEOUT_SECONDS), mode=self.mode
-            )
-        else:
-            raise ValueError("Invalid client type. Must be 'openai' or 'azure'")
-        logger.debug("Initialized OpenAILLMService with patched OpenAI client.")
+    # def __post_init__(self):
+    #     logger.debug("Initialized OpenAILLMService with patched OpenAI client.")
+    #     self.llm_async_client: instructor.AsyncInstructor = instructor.from_openai(
+    #         AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, timeout=TIMEOUT_SECONDS)
+    #     )
 
-    @throttle_async_func_call(max_concurrent=int(os.getenv("CONCURRENT_TASK_LIMIT", 1024)), stagger_time=0.001, waiting_time=0.001)
+    @throttle_async_func_call(max_concurrent=256, stagger_time=0.001, waitting_time=0.001)
     async def send_message(
         self,
         prompt: str,
         model: str | None = None,
         system_prompt: str | None = None,
         history_messages: list[dict[str, str]] | None = None,
-        response_model: Type[T_model] | None = None,
+        response_model: Type[GTResponseModel] | None = None,
         **kwargs: Any,
-    ) -> Tuple[T_model, list[dict[str, str]]]:
+    ) -> Tuple[str, list[dict[str, str]]]:
         """Send a message to the language model and receive a response.
 
         Args:
@@ -80,48 +64,58 @@ class OpenAILLMService(BaseLLMService):
         Returns:
             str: The response from the language model.
         """
-        logger.debug(f"Sending message with prompt: {prompt}")
-        model = model or self.model
-        if model is None:
-            raise ValueError("Model name must be provided.")
-        messages: list[dict[str, str]] = []
+        # logger.debug(f"Sending message with prompt: {prompt}")
+        # model = model or self.model
+        # if model is None:
+        #     raise ValueError("Model name must be provided.")
+        # messages: list[dict[str, str]] = []
 
+        # if system_prompt:
+        #     messages.append({"role": "system", "content": system_prompt})
+        #     logger.debug(f"Added system prompt: {system_prompt}")
+
+        # if history_messages:
+        #     messages.extend(history_messages)
+        #     logger.debug(f"Added history messages: {history_messages}")
+
+        # messages.append({"role": "user", "content": prompt})
+
+        # llm_response: GTResponseModel = await self.llm_async_client.chat.completions.create(
+        #     model=model,
+        #     messages=messages,  # type: ignore
+        #     response_model=response_model.Model
+        #     if response_model and issubclass(response_model, BTResponseModel)
+        #     else response_model,
+        #     **kwargs,
+        #     max_retries=AsyncRetrying(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)),
+        # )
+
+        # if not llm_response:
+        #     logger.error("No response received from the language model.")
+        #     raise LLMServiceNoResponseError("No response received from the language model.")
+
+        # messages.append(
+        #     {
+        #         "role": "assistant",
+        #         "content": llm_response.model_dump_json() if isinstance(llm_response, BaseModel) else str(llm_response),
+        #     }
+        # )
+        # logger.debug(f"Received response: {llm_response}")
+
+        bedrock_cli = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-west-2",
+        )
+
+        messages, system = [], []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-            logger.debug(f"Added system prompt: {system_prompt}")
+            system.append({"text": system_prompt})
 
-        if history_messages:
-            messages.extend(history_messages)
-            logger.debug(f"Added history messages: {history_messages}")
+        messages.append({"role": "user", "content": [{"text": prompt}]})
 
-        messages.append({"role": "user", "content": prompt})
+        response = bedrock_cli.converse(modelId=self.CHAT_MODEL_ID, messages=messages, system=system)
 
-        llm_response: T_model = await self.llm_async_client.chat.completions.create(
-            model=model,
-            messages=messages,  # type: ignore
-            response_model=response_model.Model
-            if response_model and issubclass(response_model, BaseModelAlias)
-            else response_model,
-            **kwargs,
-            max_retries=AsyncRetrying(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)),
-        )
-
-        if not llm_response:
-            logger.error("No response received from the language model.")
-            raise LLMServiceNoResponseError("No response received from the language model.")
-
-        messages.append(
-            {
-                "role": "assistant",
-                "content": llm_response.model_dump_json() if isinstance(llm_response, BaseModel) else str(llm_response),
-            }
-        )
-        logger.debug(f"Received response: {llm_response}")
-
-        if response_model and issubclass(response_model, BaseModelAlias):
-            llm_response = cast(T_model, cast(BaseModelAlias.Model, llm_response).to_dataclass(llm_response))
-
-        return llm_response, messages
+        return response["output"]["message"]["content"][0]["text"], messages
 
 
 @dataclass
@@ -129,24 +123,15 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
     """Base class for Language Model implementations."""
 
     embedding_dim: int = field(default=1536)
-    max_elements_per_request: int = field(default=32)
+    max_request_tokens: int = 8000
     model: Optional[str] = field(default="text-embedding-3-small")
-    client: Literal["openai", "azure"] = field(default="openai")
-    api_version: Optional[str] = field(default=None)
+    embedding_model: SentenceTransformer = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    def __post_init__(self):
-        if self.client == "azure":
-            assert (
-                self.base_url is not None and self.api_version is not None
-            ), "Azure OpenAI requires a base url and an api version."
-            self.embedding_async_client = AsyncAzureOpenAI(
-                azure_endpoint=self.base_url, api_key=self.api_key, api_version=self.api_version
-            )
-        elif self.client == "openai":
-            self.embedding_async_client = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
-        else:
-            raise ValueError("Invalid client type. Must be 'openai' or 'azure'")
-        logger.debug("Initialized OpenAIEmbeddingService with OpenAI client.")
+    # def __post_init__(self):
+    #     self.embedding_async_client: AsyncOpenAI = AsyncOpenAI(
+    #         base_url=self.base_url, api_key=self.api_key, timeout=TIMEOUT_SECONDS
+    #     )
+    #     logger.debug("Initialized OpenAIEmbeddingService with OpenAI client.")
 
     async def encode(self, texts: list[str], model: Optional[str] = None) -> np.ndarray[Any, np.dtype[np.float32]]:
         """Get the embedding representation of the input text.
@@ -159,26 +144,40 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
             list[float]: The embedding vector as a list of floats.
         """
         logger.debug(f"Getting embedding for texts: {texts}")
-        model = model or self.model
-        if model is None:
-            raise ValueError("Model name must be provided.")
+        # model = model or self.model
+        # if model is None:
+        #     raise ValueError("Model name must be provided.")
 
-        batched_texts = [
-            texts[i * self.max_elements_per_request : (i + 1) * self.max_elements_per_request]
-            for i in range((len(texts) + self.max_elements_per_request - 1) // self.max_elements_per_request)
-        ]
-        response = await asyncio.gather(*[self._embedding_request(b, model) for b in batched_texts])
+        # Chunk the requests to size limits
+        # max_chunk_length = self.max_request_tokens * TOKEN_TO_CHAR_RATIO
+        # text_chunks: List[List[str]] = []
 
-        data = chain(*[r.data for r in response])
-        embeddings = np.array([dp.embedding for dp in data])
+        # current_chunk: List[str] = []
+        # current_chunk_length = 0
+        # for text in texts:
+        #     text_length = len(text)
+        #     if text_length + current_chunk_length > max_chunk_length:
+        #         text_chunks.append(current_chunk)
+        #         current_chunk = []
+        #         current_chunk_length = 0
+        #     current_chunk.append(text)
+        #     current_chunk_length += text_length
+        # text_chunks.append(current_chunk)
+
+        # response = await asyncio.gather(*[self._embedding_request(chunk, model) for chunk in text_chunks])
+
+        embeddings = self.embedding_model.encode(texts, normalize_embeddings=True, batch_size=32, device="cpu")
+
+        # data = chain(*[r.data for r in response])
+        # embeddings = np.array([dp.embedding for dp in data])
         logger.debug(f"Received embedding response: {len(embeddings)} embeddings")
 
         return embeddings
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((RateLimitError, APIConnectionError, TimeoutError)),
-    )
-    async def _embedding_request(self, input: List[str], model: str) -> Any:
-        return await self.embedding_async_client.embeddings.create(model=model, input=input, encoding_format="float")
+    # @retry(
+    #     stop=stop_after_attempt(3),
+    #     wait=wait_exponential(multiplier=1, min=4, max=10),
+    #     retry=retry_if_exception_type((RateLimitError, APIConnectionError, TimeoutError)),
+    # )
+    # async def _embedding_request(self, input: List[str], model: str) -> Any:
+    #     return await self.embedding_async_client.embeddings.create(model=model, input=input, encoding_format="float")

@@ -3,12 +3,12 @@
 import argparse
 import asyncio
 import json
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import xxhash
-from _domain import DOMAIN, ENTITY_TYPES, QUERIES
 from dotenv import load_dotenv
 from tqdm import tqdm
 
@@ -19,7 +19,6 @@ from fast_graphrag._utils import get_event_loop
 @dataclass
 class Query:
     """Dataclass for a query."""
-
     question: str = field()
     answer: str = field()
     evidence: List[Tuple[str, int]] = field()
@@ -36,25 +35,29 @@ def load_dataset(dataset_name: str, subset: int = 0) -> Any:
         return dataset
 
 
-def get_corpus(dataset: Any, dataset_name: str) -> Dict[int, Tuple[int | str, str]]:
+def get_corpus(dataset: Any) -> Dict[str, str]:
     """Get the corpus from the dataset."""
-    if dataset_name == "2wikimultihopqa" or dataset_name == "hotpotqa":
-        passages: Dict[int, Tuple[int | str, str]] = {}
+    passages: Dict[str, List[List[str]]] = defaultdict(list)
 
-        for datapoint in dataset:
-            context = datapoint["context"]
+    for datapoint in dataset:
+        context = datapoint["context"]
 
-            for passage in context:
-                title, text = passage
-                title = title.encode("utf-8").decode()
-                text = "\n".join(text).encode("utf-8").decode()
-                hash_t = xxhash.xxh3_64_intdigest(text)
-                if hash_t not in passages:
-                    passages[hash_t] = (title, text)
+        for passage in context:
+            title, text = passage
+            passages[title].append(text)
 
-        return passages
-    else:
-        raise NotImplementedError(f"Dataset {dataset_name} not supported.")
+    for title, passage in passages.items():
+        ids = np.array([xxhash.xxh64("  ".join(p)).intdigest() for p in passage], dtype=np.uint64)
+
+        # Check that all ids are the same
+        assert np.all(ids == ids[0]), f"Passages with the same title do not have the same hash: {title}"
+
+        passages[title] = [passage[0]]
+
+    return {
+        title.encode("utf-8").decode(): "  ".join(passage[0]).encode("utf-8").decode()
+        for title, passage in passages.items()
+    }
 
 
 def get_queries(dataset: Any):
@@ -76,6 +79,28 @@ def get_queries(dataset: Any):
 if __name__ == "__main__":
     load_dotenv()
 
+    DOMAIN = """Analyse the following passage and identify the people, creative works, and places mentioned in it.
+ IMPORTANT: be careful to make sure to extract as separate entities (to be connected with the main one) a person's
+ role as a family member (such as 'son', 'uncle', 'wife', ...), their profession (such as 'director'), and the location
+ where they live or work. Each entity description should be a short summary containing only essential information
+ to characterize the entity. Pay attention to the spelling of the names.
+"""
+    QUERIES = [
+        "When did Prince Arthur's mother die?",
+        "What is the place of birth of Elizabeth II's husband?",
+        "Which film has the director died later, Interstellar or Harry Potter I?",
+        "Where does the singer who wrote the song Blank Space work at?",
+    ]
+
+    ENTITY_TYPES = [
+        "person",
+        "familiy_role",
+        "location",
+        "organization",
+        "creative_work",
+        "profession",
+    ]
+
     parser = argparse.ArgumentParser(description="GraphRAG CLI")
     parser.add_argument("-d", "--dataset", default="2wikimultihopqa", help="Dataset to use.")
     parser.add_argument("-n", type=int, default=0, help="Subset of corpus to use.")
@@ -87,28 +112,28 @@ if __name__ == "__main__":
     print("Loading dataset...")
     dataset = load_dataset(args.dataset, subset=args.n)
     working_dir = f"./db/graph/{args.dataset}_{args.n}"
-    corpus = get_corpus(dataset, args.dataset)
 
     if args.create:
+        corpus = get_corpus(dataset)
         print("Dataset loaded. Corpus:", len(corpus))
         grag = GraphRAG(
             working_dir=working_dir,
-            domain=DOMAIN[args.dataset],
+            domain=DOMAIN,
             example_queries="\n".join(QUERIES),
-            entity_types=ENTITY_TYPES[args.dataset],
+            entity_types=ENTITY_TYPES,
         )
         grag.insert(
-            [f"{title}: {corpus}" for _, (title, corpus) in tuple(corpus.items())],
+            [f"{title}: {corpus}" for title, corpus in tuple(corpus.items())],
             metadata=[{"id": title} for title in tuple(corpus.keys())],
         )
-    if args.benchmark:
+    elif args.benchmark:
         queries = get_queries(dataset)
         print("Dataset loaded. Queries:", len(queries))
         grag = GraphRAG(
             working_dir=working_dir,
-            domain=DOMAIN[args.dataset],
+            domain=DOMAIN,
             example_queries="\n".join(QUERIES),
-            entity_types=ENTITY_TYPES[args.dataset],
+            entity_types=ENTITY_TYPES,
         )
 
         async def _query_task(query: Query) -> Dict[str, Any]:
@@ -116,12 +141,7 @@ if __name__ == "__main__":
             return {
                 "question": query.question,
                 "answer": answer.response,
-                "evidence": [
-                    corpus[chunk.metadata["id"]][0]
-                        if isinstance(chunk.metadata["id"], int)
-                        else chunk.metadata["id"]
-                    for chunk, _ in answer.context.chunks
-                ],
+                "evidence": [chunk.metadata["id"] for chunk, _ in answer.context.chunks],
                 "ground_truth": [e[0] for e in query.evidence],
             }
 
@@ -157,7 +177,7 @@ if __name__ == "__main__":
             ground_truth = answer["ground_truth"]
             predicted_evidence = answer["evidence"]
 
-            p_retrieved: float = len(set(ground_truth).intersection(set(predicted_evidence))) / len(set(ground_truth))
+            p_retrieved: float = len(set(ground_truth).intersection(set(predicted_evidence))) / len(ground_truth)
             retrieval_scores.append(p_retrieved)
 
             if answer["question"] in questions_multihop:

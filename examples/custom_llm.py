@@ -1,8 +1,6 @@
 """Example usage of GraphRAG with custom LLM and Embedding services compatible with the OpenAI API."""
-
 from typing import List
 
-import instructor
 from dotenv import load_dotenv
 
 from fast_graphrag import GraphRAG
@@ -21,9 +19,7 @@ grag = GraphRAG(
     example_queries="\n".join(QUERIES),
     entity_types=ENTITY_TYPES,
     config=GraphRAG.Config(
-        llm_service=OpenAILLMService(
-            model="your-llm-model", base_url="llm.api.url.com", api_key="your-api-key", mode=instructor.Mode.JSON
-        ),
+        llm_service=OpenAILLMService(model="your-llm-model", base_url="llm.api.url.com", api_key="your-api-key"),
         embedding_service=OpenAIEmbeddingService(
             model="your-embedding-model",
             base_url="emb.api.url.com",

@@ -3,7 +3,7 @@
 </h1>
 <h4 align="center">
   <a href="https://github.com/circlemind-ai/fast-graphrag/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="fast-graphrag is released under the MIT license." alt="Fast GraphRAG by Circlemind"/>
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="fast-graphrag is released under the MIT license." />
   </a>
   <a href="https://github.com/circlemind-ai/fast-graphrag/blob/main/CONTRIBUTING.md">
     <img src="https://img.shields.io/badge/PRs-Welcome-brightgreen" alt="PRs welcome!" />
@@ -26,12 +26,7 @@
 </h4>
 
 > [!NOTE]
-> Using *The Wizard of Oz*, `fast-graphrag` costs $0.08 vs. `graphrag` $0.48 — **a 6x costs saving** that further improves with data size and number of insertions.
-
-## News (and Coming Soon)
-- [ ] Support for IDF weightening of entities
-- [x] Support for generic entities and concepts (initial commit)
-- [x] [2024.12.02] Benchmarks comparing Fast GraphRAG to LightRAG, GraphRAG and VectorDBs released [here](https://github.com/circlemind-ai/fast-graphrag/blob/main/benchmarks/README.md)
+> Using *The Wizard of Oz*, `fast-graphrag` costs $0.08 vs. `graphrag` $0.48 — **a 6x costs saving** that further improves with data size and number of insertions. Stay tuned for the official benchmarks, and join us as a contributor!
 
 ## Features
 
@@ -46,18 +41,18 @@ Fast GraphRAG is built to fit seamlessly into your retrieval pipeline, giving yo
 
 ## Install
 
-**Install from source (recommended for best performance)**
+**Install from PyPi (recommended)**
+
+```bash
+pip install fast-graphrag
+```
+
+**Install from source**
 
 ```bash
 # clone this repo first
 cd fast_graphrag
 poetry install
-```
-
-**Install from PyPi (recommended for stability)**
-
-```bash
-pip install fast-graphrag
 ```
 
 ## Quickstart
@@ -72,11 +67,6 @@ Download a copy of *A Christmas Carol* by Charles Dickens:
 
 ```bash
 curl https://raw.githubusercontent.com/circlemind-ai/fast-graphrag/refs/heads/main/mock_data.txt > ./book.txt
-```
-
-Optional: Set the limit for concurrent requests to the LLM (i.e., to control the number of tasks processed simultaneously by the LLM, this is helpful when running local models)
-```bash
-export CONCURRENT_TASK_LIMIT=8
 ```
 
 Use the Python snippet below:

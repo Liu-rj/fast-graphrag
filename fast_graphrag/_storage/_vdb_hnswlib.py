@@ -1,6 +1,6 @@
 import pickle
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
 import hnswlib
 import numpy as np
@@ -16,9 +16,9 @@ from ._base import BaseVectorStorage
 
 @dataclass
 class HNSWVectorStorageConfig:
-    ef_construction: int = field(default=128)
-    M: int = field(default=64)
-    ef_search: int = field(default=96)
+    ef_construction: int = field(default=64)
+    M: int = field(default=48)
+    ef_search: int = field(default=64)
     num_threads: int = field(default=-1)
 
 
@@ -77,14 +77,15 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
         if top_k > self.config.ef_search:
             self._index.set_ef(top_k)
 
-        # distances is [0, 2] (best, worst)
         ids, distances = self._index.knn_query(data=embeddings, k=top_k, num_threads=self.config.num_threads)
 
-        return ids, 1.0 - np.array(distances, dtype=TScore) * 0.5
+        return ids, 1.0 - np.array(distances, dtype=TScore)
 
     async def score_all(
-        self, embeddings: Iterable[GTEmbedding], top_k: int = 1, threshold: Optional[float] = None
+        self, embeddings: Iterable[GTEmbedding], top_k: int = 1, confidence_threshold: float = 0.0
     ) -> csr_matrix:
+        if confidence_threshold > 0.0:
+            raise NotImplementedError("Confidence threshold is not supported yet.")
         if not isinstance(embeddings, np.ndarray):
             embeddings = np.array(list(embeddings), dtype=np.float32)
 
@@ -96,14 +97,10 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
         if top_k > self.config.ef_search:
             self._index.set_ef(top_k)
 
-        # distances is [0, 2] (best, worst)
         ids, distances = self._index.knn_query(data=embeddings, k=top_k, num_threads=self.config.num_threads)
 
         ids = np.array(ids)
-        scores = 1.0 - np.array(distances, dtype=TScore) * 0.5
-
-        if threshold is not None:
-            scores[scores < threshold] = 0
+        scores = np.array(distances, dtype=TScore)
 
         # Create sparse distance matrix with shape (#embeddings, #all_embeddings)
         flattened_ids = ids.ravel()
@@ -113,6 +110,8 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
             (flattened_scores, (np.repeat(np.arange(len(ids)), top_k), flattened_ids)),
             shape=(len(ids), self.size),
         )
+
+        scores.data = (2.0 - scores.data) * 0.5
 
         return scores
 
@@ -128,9 +127,7 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
                     self._index.load_index(index_file_name, allow_replace_deleted=True)
                     with open(metadata_file_name, "rb") as f:
                         self._metadata = pickle.load(f)
-                        logger.debug(
-                            f"Loaded {self.size} elements from vectordb storage '{index_file_name}'."
-                        )
+                        print(f"Loaded {self.size} elements from vectordb storage '{index_file_name}'.")
                     return  # All good
                 except Exception as e:
                     t = f"Error loading metadata file for vectordb storage '{metadata_file_name}': {e}"
@@ -139,12 +136,12 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
             else:
                 logger.info(f"No data file found for vectordb storage '{index_file_name}'. Loading empty vectordb.")
         else:
-            logger.debug("Creating new volatile vectordb storage.")
+            print("Creating new volatile vectordb storage.")
         self._index.init_index(
             max_elements=self.INITIAL_MAX_ELEMENTS,
             ef_construction=self.config.ef_construction,
             M=self.config.M,
-            allow_replace_deleted=True
+            allow_replace_deleted=True,
         )
         self._index.set_ef(self.config.ef_search)
         self._metadata = {}
@@ -158,7 +155,7 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
                 self._index.save_index(index_file_name)
                 with open(metadata_file_name, "wb") as f:
                     pickle.dump(self._metadata, f)
-                logger.debug(f"Saving {self.size} elements from vectordb storage '{index_file_name}'.")
+                print(f"Saving {self.size} elements from vectordb storage '{index_file_name}'.")
             except Exception as e:
                 t = f"Error saving vectordb storage from {index_file_name}: {e}"
                 logger.error(t)
@@ -170,14 +167,15 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
 
         index_file_name = self.namespace.get_load_path(self.RESOURCE_NAME.format(self.embedding_dim))
         metadata_file_name = self.namespace.get_load_path(self.RESOURCE_METADATA_NAME)
+
         if index_file_name and metadata_file_name:
             try:
                 self._index.load_index(index_file_name, allow_replace_deleted=True)
                 with open(metadata_file_name, "rb") as f:
                     self._metadata = pickle.load(f)
-                logger.debug(f"Loaded {self.size} elements from vectordb storage '{index_file_name}'.")
+                print(f"Loaded {self.size} elements from vectordb storage '{index_file_name}'.")
 
-                return # All good
+                return  # All good
             except Exception as e:
                 t = f"Error loading vectordb storage from {index_file_name}: {e}"
                 logger.error(t)
@@ -188,7 +186,7 @@ class HNSWVectorStorage(BaseVectorStorage[GTId, GTEmbedding]):
             max_elements=self.INITIAL_MAX_ELEMENTS,
             ef_construction=self.config.ef_construction,
             M=self.config.M,
-            allow_replace_deleted=True
+            allow_replace_deleted=True,
         )
         self._index.set_ef(self.config.ef_search)
         self._metadata = {}
