@@ -8,6 +8,7 @@ from fast_graphrag import GraphRAG
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("--data_dir", type=str, default="datasets/maple/Physics", required=True)
+argparser.add_argument("--benchmark_dir", type=str, default="datasets/maple/Physics", required=True)
 args = argparser.parse_args()
 
 WORKING_DIR = args.data_dir
@@ -35,7 +36,7 @@ if __name__ == "__main__":
     ]
     for question_type in question_types:
         contents = []
-        with open(os.path.join(args.data_dir, f"{question_type}.jsonl"), "r") as f:
+        with open(os.path.join(args.benchmark_dir, f"{question_type}.jsonl"), "r") as f:
             for item in jsonlines.Reader(f):
                 contents.append(item)
 

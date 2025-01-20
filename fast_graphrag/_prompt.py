@@ -152,6 +152,8 @@ Follow these steps:
 4. While you write the response, you must include inline references to the all the sources you are using by appending `[<source_id>]` at the end of each sentence, where `source_id` is the corresponding source ID from the "Sources" list.
 5. Write the response to the user query - which must include the inline references - based on the information you have gathered. Be very concise and answer the user query directly. If the response cannot be inferred from the input data, just say no relevant information was found. Do not make anything up or add unrelevant information.
 
+Note: Keep the names of the entities as they are in the input data. Do not change them in any way.
+
 Answer:
 """
 

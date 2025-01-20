@@ -2,6 +2,7 @@
 
 __all__ = ["GraphRAG", "QueryParam"]
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Type
 
@@ -116,3 +117,5 @@ class GraphRAG(BaseGraphRAG[TEmbedding, THash, TChunk, TEntity, TRelation, TId])
             node_upsert_policy=self.config.node_upsert_policy,
             edge_upsert_policy=self.config.edge_upsert_policy,
         )
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.state_manager.query_start())

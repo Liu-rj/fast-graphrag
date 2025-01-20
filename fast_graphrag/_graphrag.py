@@ -146,9 +146,9 @@ class BaseGraphRAG(Generic[GTEmbedding, GTHash, GTChunk, GTNode, GTEdge, GTId]):
         self, query: str, id_mapping: dict, params: Optional[QueryParam] = None
     ) -> Tuple[TQueryResponse[GTNode, GTEdge, GTHash, GTChunk], int, int, int]:
         async def _query() -> TQueryResponse[GTNode, GTEdge, GTHash, GTChunk]:
-            tic = time.time()
-            await self.state_manager.query_start()
-            print(f"Query start time: {time.time() - tic}")
+            # tic = time.time()
+            # await self.state_manager.query_start()
+            # print(f"Query start time: {time.time() - tic}")
             try:
                 tic = time.time()
                 answer, token_len = await self.async_query(query, id_mapping, params)
@@ -159,7 +159,8 @@ class BaseGraphRAG(Generic[GTEmbedding, GTHash, GTChunk, GTNode, GTEdge, GTId]):
                 logger.error(f"Error during query: {e}")
                 raise e
             finally:
-                await self.state_manager.query_done()
+                # await self.state_manager.query_done()
+                pass
 
         return get_event_loop().run_until_complete(_query())
 

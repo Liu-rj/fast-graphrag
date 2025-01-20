@@ -349,9 +349,9 @@ class DefaultStateManagerService(BaseStateManagerService[TEntity, TRelation, THa
         tasks: List[Awaitable[Any]] = []
         storages: List[BaseStorage] = [
             self.graph_storage,
-            self.entity_storage,
-            self.chunk_storage,
-            self._relationships_to_chunks,
+            # self.entity_storage,
+            # self.chunk_storage,
+            # self._relationships_to_chunks,
             self._entities_to_relationships,
         ]
         for storage_inst in storages:
