@@ -154,6 +154,9 @@ Follow these steps:
 
 Note: Keep the names of the entities as they are in the input data. Do not change them in any way.
 
+# Target response length and format
+a sentence or a paragraph based on provided information, concise while comprehensive about details.
+
 Answer:
 """
 
@@ -178,6 +181,10 @@ Note:
 1. User questions can be about node inquries or relations between nodes.
 2. Entities in the question may not have direct relationship and answering the question will need to consider multi-hop relations.
 3. Users may not see the provided data tables, so provied necessary evidence in your response.
+4. Keep the names of the entities as they are in the input data. Do not change them in any way.
+
+# Target response length and format
+a sentence or a paragraph based on provided information, concise while comprehensive about details.
 
 Answer:
 """

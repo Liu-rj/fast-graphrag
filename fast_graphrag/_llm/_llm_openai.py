@@ -8,7 +8,7 @@ from typing import Any, List, Optional, Tuple, Type, cast
 import boto3
 import instructor
 import numpy as np
-from openai import APIConnectionError, AsyncOpenAI, RateLimitError
+from openai import APIConnectionError, AsyncOpenAI, RateLimitError, OpenAI
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from tenacity import (
@@ -34,14 +34,27 @@ class OpenAILLMService(BaseLLMService):
 
     model: Optional[str] = field(default="gpt-4o-mini")
     CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    # CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    # CHAT_MODEL_ID = "meta.llama3-1-405b-instruct-v1:0"
 
-    # def __post_init__(self):
-    #     logger.debug("Initialized OpenAILLMService with patched OpenAI client.")
-    #     self.llm_async_client: instructor.AsyncInstructor = instructor.from_openai(
-    #         AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, timeout=TIMEOUT_SECONDS)
-    #     )
+    def __post_init__(self):
+        # logger.debug("Initialized OpenAILLMService with patched OpenAI client.")
+        # self.llm_async_client: instructor.AsyncInstructor = instructor.from_openai(
+        #     AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, timeout=TIMEOUT_SECONDS)
+        # )
+        if self.model == "claude-3.5-sonnet":
+            self.client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name="us-west-2",
+            )
+        elif self.model == "gpt-4o-mini":
+            self.client = OpenAI()
+        else:
+            raise ValueError(f"Unsupported model: {self.model}")
 
-    @throttle_async_func_call(max_concurrent=256, stagger_time=0.001, waitting_time=0.001)
+    @throttle_async_func_call(
+        max_concurrent=256, stagger_time=0.001, waitting_time=0.001
+    )
     async def send_message(
         self,
         prompt: str,
@@ -102,20 +115,35 @@ class OpenAILLMService(BaseLLMService):
         # )
         # logger.debug(f"Received response: {llm_response}")
 
-        bedrock_cli = boto3.client(
-            service_name="bedrock-runtime",
-            region_name="us-west-2",
-        )
+        try:
+            if self.model == "claude-3.5-sonnet":
+                messages, system = [], []
+                if system_prompt:
+                    system.append({"text": system_prompt})
 
-        messages, system = [], []
-        if system_prompt:
-            system.append({"text": system_prompt})
+                messages.append({"role": "user", "content": [{"text": prompt}]})
 
-        messages.append({"role": "user", "content": [{"text": prompt}]})
+                response = self.client.converse(
+                    modelId=self.CHAT_MODEL_ID, messages=messages, system=system
+                )
 
-        response = bedrock_cli.converse(modelId=self.CHAT_MODEL_ID, messages=messages, system=system)
+                return response["output"]["message"]["content"][0]["text"], messages
+            elif self.model == "gpt-4o-mini":
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
 
-        return response["output"]["message"]["content"][0]["text"], messages
+                messages.append({"role": "user", "content": prompt})
+
+                response = self.client.chat.completions.create(
+                    model=self.model, messages=messages, stream=False
+                )
+                return response.choices[0].message.content, messages
+            else:
+                raise ValueError(f"Unsupported model: {self.model}")
+        except Exception as e:
+            logger.error(f"Error in sending message: {e}")
+            return "Sorry, I am not able to provide an answer to that question.", []
 
 
 @dataclass
@@ -125,7 +153,9 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
     embedding_dim: int = field(default=1536)
     max_request_tokens: int = 8000
     model: Optional[str] = field(default="text-embedding-3-small")
-    embedding_model: SentenceTransformer = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    embedding_model: SentenceTransformer = SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
 
     # def __post_init__(self):
     #     self.embedding_async_client: AsyncOpenAI = AsyncOpenAI(
@@ -133,7 +163,9 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
     #     )
     #     logger.debug("Initialized OpenAIEmbeddingService with OpenAI client.")
 
-    async def encode(self, texts: list[str], model: Optional[str] = None) -> np.ndarray[Any, np.dtype[np.float32]]:
+    async def encode(
+        self, texts: list[str], model: Optional[str] = None
+    ) -> np.ndarray[Any, np.dtype[np.float32]]:
         """Get the embedding representation of the input text.
 
         Args:
@@ -166,7 +198,9 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
 
         # response = await asyncio.gather(*[self._embedding_request(chunk, model) for chunk in text_chunks])
 
-        embeddings = self.embedding_model.encode(texts, normalize_embeddings=True, batch_size=32, device="cpu")
+        embeddings = self.embedding_model.encode(
+            texts, normalize_embeddings=True, batch_size=32, device="cpu"
+        )
 
         # data = chain(*[r.data for r in response])
         # embeddings = np.array([dp.embedding for dp in data])

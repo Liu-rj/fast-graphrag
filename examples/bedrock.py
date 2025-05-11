@@ -5,34 +5,49 @@ import jsonlines
 from sentence_transformers import SentenceTransformer
 
 from fast_graphrag import GraphRAG
+from fast_graphrag._llm import OpenAILLMService
 
 argparser = argparse.ArgumentParser()
-argparser.add_argument("--data_dir", type=str, default="datasets/maple/Physics", required=True)
-argparser.add_argument("--benchmark_dir", type=str, default="datasets/maple/Physics", required=True)
+argparser.add_argument(
+    "--data_dir", type=str, default="datasets/maple/Physics", required=True
+)
+argparser.add_argument(
+    "--benchmark_dir", type=str, default="datasets/maple/Physics", required=True
+)
 args = argparser.parse_args()
 
+model_name = "claude-3.5-sonnet"
 WORKING_DIR = args.data_dir
-RESULT_DIR = os.path.join("results", os.path.basename(WORKING_DIR))
+RESULT_DIR = os.path.join("results", os.path.basename(WORKING_DIR), model_name)
 
 print("Working dir:", WORKING_DIR, "Result dir:", RESULT_DIR)
 
 if not os.path.exists(RESULT_DIR):
     os.makedirs(RESULT_DIR)
 
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", cache_folder=WORKING_DIR, device="cpu")
+model = SentenceTransformer(
+    "sentence-transformers/all-MiniLM-L6-v2", cache_folder=WORKING_DIR, device="cpu"
+)
 
-grag = GraphRAG(working_dir=WORKING_DIR, domain=None, example_queries=None, entity_types=None)
+grag = GraphRAG(
+    working_dir=WORKING_DIR,
+    domain=None,
+    example_queries=None,
+    entity_types=None,
+    config=GraphRAG.Config(llm_service=OpenAILLMService(model=model_name)),
+)
 
 if __name__ == "__main__":
-    output_file = os.path.join(RESULT_DIR, "results.jsonl")
+    output_file = os.path.join(RESULT_DIR, "results_rephrased_spo.jsonl")
     # if os.path.exists(output_file):
     #     os.remove(output_file)
 
     question_types = [
-        "single_entity_abstract",
-        "single_entity_concrete",
-        "multi_entity_abstract",
-        "multi_entity_concrete",
+        # "single_entity_abstract_rephrased",
+        # "single_entity_concrete_rephrased",
+        # "multi_entity_abstract_rephrased",
+        "multi_entity_concrete_rephrased",
+        # "nested_question_rephrased",
     ]
     for question_type in question_types:
         contents = []
