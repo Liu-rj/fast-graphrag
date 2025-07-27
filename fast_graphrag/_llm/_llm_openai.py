@@ -33,7 +33,7 @@ class OpenAILLMService(BaseLLMService):
     """LLM Service for OpenAI LLMs."""
 
     model: Optional[str] = field(default="gpt-4o-mini")
-    CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    # CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     # CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
     # CHAT_MODEL_ID = "meta.llama3-1-405b-instruct-v1:0"
 
@@ -47,7 +47,20 @@ class OpenAILLMService(BaseLLMService):
                 service_name="bedrock-runtime",
                 region_name="us-west-2",
             )
-        elif self.model == "gpt-4o-mini":
+            self.CHAT_MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+        elif self.model == "mistral-large":
+            self.client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name="us-west-2",
+            )
+            self.CHAT_MODEL_ID = "mistral.mistral-large-2407-v1:0"
+        elif self.model == "deepseek-r1":
+            self.client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name="us-west-2",
+            )
+            self.CHAT_MODEL_ID = "us.deepseek.r1-v1:0"
+        elif self.model in ["gpt-4o-mini", "gpt-4.1-mini"]:
             self.client = OpenAI()
         else:
             raise ValueError(f"Unsupported model: {self.model}")
@@ -116,7 +129,7 @@ class OpenAILLMService(BaseLLMService):
         # logger.debug(f"Received response: {llm_response}")
 
         try:
-            if self.model == "claude-3.5-sonnet":
+            if self.model in ["claude-3.5-sonnet", "mistral-large", "deepseek-r1"]:
                 messages, system = [], []
                 if system_prompt:
                     system.append({"text": system_prompt})
@@ -128,7 +141,7 @@ class OpenAILLMService(BaseLLMService):
                 )
 
                 return response["output"]["message"]["content"][0]["text"], messages
-            elif self.model == "gpt-4o-mini":
+            elif self.model in ["gpt-4o-mini", "gpt-4.1-mini"]:
                 messages = []
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})

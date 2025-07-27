@@ -14,9 +14,23 @@ argparser.add_argument(
 argparser.add_argument(
     "--benchmark_dir", type=str, default="datasets/maple/Physics", required=True
 )
+argparser.add_argument(
+    "--model",
+    type=str,
+    default="claude-3.5-sonnet",
+    choices=[
+        "claude-3.5-sonnet",
+        "mistral-large",
+        "deepseek-r1",
+        "gpt-4o-mini",
+        "gpt-4.1-mini",
+    ],
+    required=True,
+    help="The model to use for the LLM service.",
+)
 args = argparser.parse_args()
 
-model_name = "claude-3.5-sonnet"
+model_name = args.model
 WORKING_DIR = args.data_dir
 RESULT_DIR = os.path.join("results", os.path.basename(WORKING_DIR), model_name)
 
@@ -38,15 +52,15 @@ grag = GraphRAG(
 )
 
 if __name__ == "__main__":
-    output_file = os.path.join(RESULT_DIR, "results_rephrased_spo.jsonl")
+    output_file = os.path.join(RESULT_DIR, "results_rephrased_s**_sp*.jsonl")
     # if os.path.exists(output_file):
     #     os.remove(output_file)
 
     question_types = [
-        # "single_entity_abstract_rephrased",
-        # "single_entity_concrete_rephrased",
+        "single_entity_abstract_rephrased",
+        "single_entity_concrete_rephrased",
         # "multi_entity_abstract_rephrased",
-        "multi_entity_concrete_rephrased",
+        # "multi_entity_concrete_rephrased",
         # "nested_question_rephrased",
     ]
     for question_type in question_types:
