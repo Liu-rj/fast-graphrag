@@ -58,6 +58,7 @@ class PickleBlobStorage(BaseBlobStorage[GTBlob]):
             try:
                 with open(data_file_name, "rb") as f:
                     self._data = pickle.load(f)
+                print(f"Loaded blob storage '{data_file_name}'.")
             except Exception as e:
                 t = f"Error loading data file for blob storage {data_file_name}: {e}"
                 logger.error(t)
